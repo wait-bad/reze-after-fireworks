@@ -18,8 +18,10 @@ struct GeminiContent {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GeminiCandidate {
     content: Option<GeminiContent>,
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +62,13 @@ struct TextPart {
 struct GenerationConfig {
     temperature: f32,
     max_output_tokens: u16,
+    thinking_config: ThinkingConfig,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThinkingConfig {
+    thinking_budget: i16,
 }
 
 fn normalize_prompt(prompt: &str) -> String {
@@ -73,7 +82,7 @@ fn normalize_prompt(prompt: &str) -> String {
 
 fn default_instruction(user_note: &str) -> String {
     let note = user_note.trim();
-    let base = "你正在扮演桌面陪伴应用里的蕾塞。请用中文回复，正常回复必须至少30个中文字符，尽量30到70字之间。减少AI味，不要总结，不要排比，不要说自己是AI，语气自然、有边界感。即使额外备注要求简短，也不要少于30个中文字符。";
+    let base = "你正在扮演桌面陪伴应用里的蕾塞。请用中文回复，尽量30到70字之间。减少AI味，不要总结，不要排比，不要说自己是AI，语气自然、有边界感。";
 
     if note.is_empty() {
         base.to_string()
@@ -140,22 +149,18 @@ fn format_transport_error(error: reqwest::Error) -> String {
     }
 }
 
-fn visible_char_count(text: &str) -> usize {
-    text.chars().filter(|character| !character.is_whitespace()).count()
-}
-
-fn is_text_too_short(text: &str) -> bool {
-    visible_char_count(text) < 30
-}
-
 fn parse_gemini_body(body: &str) -> Result<String, String> {
     let parsed: GeminiResponse =
         serde_json::from_str(body).map_err(|error| format!("解析 Gemini 响应失败：{error}"))?;
 
-    parsed
+    let candidate = parsed
         .candidates
         .and_then(|mut candidates| candidates.pop())
-        .and_then(|candidate| candidate.content)
+        .ok_or_else(|| "Gemini 没有返回候选回复。".to_string())?;
+
+    let finish_reason = candidate.finish_reason.unwrap_or_else(|| "UNKNOWN".to_string());
+    let text = candidate
+        .content
         .and_then(|content| content.parts)
         .and_then(|parts| {
             let joined = parts
@@ -170,7 +175,13 @@ fn parse_gemini_body(body: &str) -> Result<String, String> {
                 Some(joined.trim().to_string())
             }
         })
-        .ok_or_else(|| "Gemini 没有返回可显示的文本。".to_string())
+        .ok_or_else(|| format!("Gemini 没有返回可显示的文本。结束原因：{finish_reason}"))?;
+
+    if finish_reason == "MAX_TOKENS" {
+        return Err(format!("Gemini 输出被 token 上限截断：{text}"));
+    }
+
+    Ok(text)
 }
 
 #[tauri::command]
@@ -203,8 +214,6 @@ fn delete_gemini_api_key() -> Result<(), String> {
 
 async fn call_gemini(prompt: String, user_note: String) -> Result<String, String> {
     let api_key = read_saved_gemini_key()?;
-    let mut normalized_prompt = normalize_prompt(&prompt);
-
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -217,7 +226,7 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
         let request = GenerateContentRequest {
             contents: vec![Content {
                 parts: vec![TextPart {
-                    text: normalized_prompt.clone(),
+                    text: normalize_prompt(&prompt),
                 }],
             }],
             system_instruction: Content {
@@ -227,7 +236,8 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
             },
             generation_config: GenerationConfig {
                 temperature: 0.95,
-                max_output_tokens: 180,
+                max_output_tokens: 512,
+                thinking_config: ThinkingConfig { thinking_budget: 0 },
             },
         };
 
@@ -258,17 +268,7 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
             .map_err(|error| format!("读取 Gemini 响应失败：{error}"))?;
 
         if status.is_success() {
-            let text = parse_gemini_body(&body)?;
-            if is_text_too_short(&text) && attempt < GEMINI_MAX_RETRIES {
-                last_error = format!("Gemini 回复过短：只有 {} 个字，正在重试。", visible_char_count(&text));
-                normalized_prompt = format!(
-                    "{}\n\n刚才回复太短了。请重写这次回复，必须至少30个中文字符，30到70字之间，不要解释规则。",
-                    normalize_prompt(&prompt)
-                );
-                thread::sleep(retry_delay(attempt + 1));
-                continue;
-            }
-            return Ok(text);
+            return parse_gemini_body(&body);
         }
 
         let mut retryable = is_retryable_status(status);
@@ -319,4 +319,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
