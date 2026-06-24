@@ -44,7 +44,8 @@ const trackStorageKey = "reze.bgm.track";
 const loopModeStorageKey = "reze.bgm.loopMode";
 const legacyGeminiApiKeyStorageKey = "reze.gemini.apiKey";
 const geminiNoteStorageKey = "reze.gemini.note";
-const defaultGeminiNote = "70字以内。减少AI味。像蕾塞本人自然说话，不要总结，不要排比，不要解释规则。";
+const oldDefaultGeminiNote = "70字以内。减少AI味。像蕾塞本人自然说话，不要总结，不要排比，不要解释规则。";
+const defaultGeminiNote = "尽量写到30到70字之间。减少AI味。像蕾塞本人自然说话，不要总结，不要排比，不要解释规则。";
 
 const state: PetState = {
   mood: 64,
@@ -62,7 +63,10 @@ const state: PetState = {
   geminiInput: "",
   geminiApiKeyDraft: "",
   geminiKeySaved: false,
-  geminiNote: localStorage.getItem(geminiNoteStorageKey) ?? defaultGeminiNote,
+  geminiNote: (() => {
+    const savedNote = localStorage.getItem(geminiNoteStorageKey);
+    return !savedNote || savedNote === oldDefaultGeminiNote ? defaultGeminiNote : savedNote;
+  })(),
   geminiStatus: "输入一句话，让她回应你。",
 };
 
@@ -532,3 +536,5 @@ async function init() {
 }
 
 init();
+
+

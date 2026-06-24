@@ -1,8 +1,9 @@
 ﻿use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 const GEMINI_ENDPOINT: &str =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+const GEMINI_MAX_RETRIES: u8 = 5;
 const KEYRING_SERVICE: &str = "RezeAfterFireworks";
 const GEMINI_KEY_ACCOUNT: &str = "gemini-api-key";
 
@@ -36,7 +37,7 @@ struct GeminiApiError {
     message: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerateContentRequest {
     contents: Vec<Content>,
@@ -44,17 +45,17 @@ struct GenerateContentRequest {
     generation_config: GenerationConfig,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct Content {
     parts: Vec<TextPart>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct TextPart {
     text: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerationConfig {
     temperature: f32,
@@ -72,7 +73,7 @@ fn normalize_prompt(prompt: &str) -> String {
 
 fn default_instruction(user_note: &str) -> String {
     let note = user_note.trim();
-    let base = "你正在扮演桌面陪伴应用里的蕾塞。请用中文回复，70字以内，减少AI味，不要总结，不要排比，不要说自己是AI，语气自然、有边界感。";
+    let base = "你正在扮演桌面陪伴应用里的蕾塞。请用中文回复，尽量写到30到70字之间，减少AI味，不要总结，不要排比，不要说自己是AI，语气自然、有边界感。";
 
     if note.is_empty() {
         base.to_string()
@@ -96,6 +97,72 @@ fn read_saved_gemini_key() -> Result<String, String> {
     } else {
         Ok(api_key)
     }
+}
+
+fn retry_delay(attempt: u8) -> Duration {
+    let seconds = match attempt {
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 6,
+        _ => 8,
+    };
+    Duration::from_secs(seconds)
+}
+
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        || status == reqwest::StatusCode::BAD_GATEWAY
+        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+}
+
+fn is_retryable_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("high demand")
+        || lower.contains("temporar")
+        || lower.contains("try again")
+        || lower.contains("overloaded")
+        || lower.contains("rate limit")
+        || lower.contains("quota")
+}
+
+fn format_transport_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        "Gemini 请求超时：当前网络无法在 20 秒内连接到 generativelanguage.googleapis.com。请检查代理/VPN 或网络环境。".to_string()
+    } else if error.is_connect() {
+        format!("Gemini 连接失败：无法连接到 generativelanguage.googleapis.com。通常是网络、代理、DNS 或防火墙问题，不是 API Key 错。详细信息：{error}")
+    } else if error.is_request() {
+        format!("Gemini 请求无法发送：请检查系统代理、证书或网络环境。详细信息：{error}")
+    } else {
+        format!("Gemini 请求失败：{error}")
+    }
+}
+
+fn parse_gemini_body(body: &str) -> Result<String, String> {
+    let parsed: GeminiResponse =
+        serde_json::from_str(body).map_err(|error| format!("解析 Gemini 响应失败：{error}"))?;
+
+    parsed
+        .candidates
+        .and_then(|mut candidates| candidates.pop())
+        .and_then(|candidate| candidate.content)
+        .and_then(|content| content.parts)
+        .and_then(|parts| {
+            let joined = parts
+                .into_iter()
+                .filter_map(|part| part.text)
+                .collect::<Vec<_>>()
+                .join("");
+
+            if joined.trim().is_empty() {
+                None
+            } else {
+                Some(joined.trim().to_string())
+            }
+        })
+        .ok_or_else(|| "Gemini 没有返回可显示的文本。".to_string())
 }
 
 #[tauri::command]
@@ -140,8 +207,8 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
             }],
         },
         generation_config: GenerationConfig {
-            temperature: 0.9,
-            max_output_tokens: 120,
+            temperature: 0.95,
+            max_output_tokens: 180,
         },
     };
 
@@ -150,64 +217,61 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
         .build()
         .map_err(|error| format!("初始化 Gemini HTTP 客户端失败：{error}"))?;
 
-    let response = client
-        .post(GEMINI_ENDPOINT)
-        .header("x-goog-api-key", api_key.trim())
-        .json(&request)
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_timeout() {
-                "Gemini 请求超时：当前网络无法在 20 秒内连接到 generativelanguage.googleapis.com。请检查代理/VPN 或网络环境。".to_string()
-            } else if error.is_connect() {
-                format!("Gemini 连接失败：无法连接到 generativelanguage.googleapis.com。通常是网络、代理、DNS 或防火墙问题，不是 API Key 错。详细信息：{error}")
-            } else if error.is_request() {
-                format!("Gemini 请求无法发送：请检查系统代理、证书或网络环境。详细信息：{error}")
-            } else {
-                format!("Gemini 请求失败：{error}")
-            }
-        })?;
+    let mut last_error = "Gemini 请求失败。".to_string();
 
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("读取 Gemini 响应失败：{error}"))?;
+    for attempt in 0..=GEMINI_MAX_RETRIES {
+        let response = client
+            .post(GEMINI_ENDPOINT)
+            .header("x-goog-api-key", api_key.trim())
+            .json(&request)
+            .send()
+            .await;
 
-    if !status.is_success() {
-        if let Ok(error_body) = serde_json::from_str::<GeminiErrorBody>(&body) {
-            if let Some(message) = error_body.error.and_then(|error| error.message) {
-                return Err(format!("Gemini 返回错误：{message}"));
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                let retryable = error.is_timeout() || error.is_connect() || error.is_request();
+                last_error = format_transport_error(error);
+                if retryable && attempt < GEMINI_MAX_RETRIES {
+                    thread::sleep(retry_delay(attempt + 1));
+                    continue;
+                }
+                return Err(last_error);
             }
+        };
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("读取 Gemini 响应失败：{error}"))?;
+
+        if status.is_success() {
+            return parse_gemini_body(&body);
         }
 
-        return Err(format!("Gemini 返回错误：HTTP {status}"));
+        let mut retryable = is_retryable_status(status);
+        if let Ok(error_body) = serde_json::from_str::<GeminiErrorBody>(&body) {
+            if let Some(message) = error_body.error.and_then(|error| error.message) {
+                retryable = retryable || is_retryable_message(&message);
+                last_error = format!("Gemini 返回错误：{message}");
+            } else {
+                last_error = format!("Gemini 返回错误：HTTP {status}");
+            }
+        } else {
+            retryable = retryable || is_retryable_message(&body);
+            last_error = format!("Gemini 返回错误：HTTP {status}");
+        }
+
+        if retryable && attempt < GEMINI_MAX_RETRIES {
+            thread::sleep(retry_delay(attempt + 1));
+            continue;
+        }
+
+        return Err(last_error);
     }
 
-    let parsed: GeminiResponse =
-        serde_json::from_str(&body).map_err(|error| format!("解析 Gemini 响应失败：{error}"))?;
-
-    let text = parsed
-        .candidates
-        .and_then(|mut candidates| candidates.pop())
-        .and_then(|candidate| candidate.content)
-        .and_then(|content| content.parts)
-        .and_then(|parts| {
-            let joined = parts
-                .into_iter()
-                .filter_map(|part| part.text)
-                .collect::<Vec<_>>()
-                .join("");
-
-            if joined.trim().is_empty() {
-                None
-            } else {
-                Some(joined.trim().to_string())
-            }
-        })
-        .ok_or_else(|| "Gemini 没有返回可显示的文本。".to_string())?;
-
-    Ok(text)
+    Err(format!("{last_error} 已自动重试 {GEMINI_MAX_RETRIES} 次。"))
 }
 
 #[tauri::command]
