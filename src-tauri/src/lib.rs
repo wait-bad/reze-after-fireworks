@@ -1,74 +1,51 @@
 ﻿use serde::{Deserialize, Serialize};
 use std::{thread, time::Duration};
 
-const GEMINI_ENDPOINT: &str =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
-const GEMINI_MAX_RETRIES: u8 = 5;
+const DEFAULT_CHAT_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_CHAT_MODEL: &str = "gpt-5.5";
+const CHAT_MAX_RETRIES: u8 = 5;
 const KEYRING_SERVICE: &str = "RezeAfterFireworks";
-const GEMINI_KEY_ACCOUNT: &str = "gemini-api-key";
+const API_KEY_ACCOUNT: &str = "chat-api-key";
+const LEGACY_GEMINI_KEY_ACCOUNT: &str = "gemini-api-key";
 
 #[derive(Debug, Deserialize)]
-struct GeminiPart {
-    text: Option<String>,
+struct ChatCompletionResponse {
+    choices: Option<Vec<ChatChoice>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GeminiContent {
-    parts: Option<Vec<GeminiPart>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GeminiCandidate {
-    content: Option<GeminiContent>,
+struct ChatChoice {
+    message: Option<ChatMessageResponse>,
     finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GeminiResponse {
-    candidates: Option<Vec<GeminiCandidate>>,
+struct ChatMessageResponse {
+    content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GeminiErrorBody {
-    error: Option<GeminiApiError>,
+struct ChatErrorBody {
+    error: Option<ChatApiError>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GeminiApiError {
+struct ChatApiError {
     message: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerateContentRequest {
-    contents: Vec<Content>,
-    system_instruction: Content,
-    generation_config: GenerationConfig,
+struct ChatCompletionRequest {
+    model: String,
+    messages: Vec<ChatMessageRequest>,
+    reasoning_effort: String,
+    max_completion_tokens: u16,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct Content {
-    parts: Vec<TextPart>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct TextPart {
-    text: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GenerationConfig {
-    temperature: f32,
-    max_output_tokens: u16,
-    thinking_config: ThinkingConfig,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ThinkingConfig {
-    thinking_budget: i16,
+struct ChatMessageRequest {
+    role: String,
+    content: String,
 }
 
 fn normalize_prompt(prompt: &str) -> String {
@@ -91,18 +68,29 @@ fn default_instruction(user_note: &str) -> String {
     }
 }
 
-fn gemini_key_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, GEMINI_KEY_ACCOUNT)
+fn api_key_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, API_KEY_ACCOUNT)
         .map_err(|error| format!("打开系统凭据失败：{error}"))
 }
 
-fn read_saved_gemini_key() -> Result<String, String> {
-    let api_key = gemini_key_entry()?.get_password().map_err(|_| {
-        "请先在设置里保存 Gemini API Key。它会存进 Windows 凭据管理器，不会写入项目文件。".to_string()
-    })?;
+fn legacy_gemini_key_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, LEGACY_GEMINI_KEY_ACCOUNT)
+        .map_err(|error| format!("打开旧系统凭据失败：{error}"))
+}
+
+fn read_saved_api_key() -> Result<String, String> {
+    let api_key = api_key_entry()
+        .and_then(|entry| entry.get_password().map_err(|error| error.to_string()))
+        .or_else(|_| {
+            legacy_gemini_key_entry()
+                .and_then(|entry| entry.get_password().map_err(|error| error.to_string()))
+        })
+        .map_err(|_| {
+            "请先在设置里保存中转站 API Key。它会存进 Windows 凭据管理器，不会写入项目文件。".to_string()
+        })?;
 
     if api_key.trim().is_empty() {
-        Err("请先在设置里保存 Gemini API Key。".to_string())
+        Err("请先在设置里保存中转站 API Key。".to_string())
     } else {
         Ok(api_key)
     }
@@ -119,9 +107,34 @@ fn retry_delay(attempt: u8) -> Duration {
     Duration::from_secs(seconds)
 }
 
+fn normalize_chat_endpoint(base_url: String) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let base = if trimmed.is_empty() {
+        DEFAULT_CHAT_BASE_URL
+    } else {
+        trimmed
+    };
+
+    if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    }
+}
+
+fn normalize_model(model: String) -> String {
+    let model = model.trim();
+    if model.is_empty() {
+        DEFAULT_CHAT_MODEL.to_string()
+    } else {
+        model.to_string()
+    }
+}
+
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
         || status == reqwest::StatusCode::BAD_GATEWAY
         || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
         || status == reqwest::StatusCode::GATEWAY_TIMEOUT
@@ -133,55 +146,65 @@ fn is_retryable_message(message: &str) -> bool {
         || lower.contains("temporar")
         || lower.contains("try again")
         || lower.contains("overloaded")
-        || lower.contains("rate limit")
-        || lower.contains("quota")
 }
 
 fn format_transport_error(error: reqwest::Error) -> String {
     if error.is_timeout() {
-        "Gemini 请求超时：当前网络无法在 20 秒内连接到 generativelanguage.googleapis.com。请检查代理/VPN 或网络环境。".to_string()
+        "AI 请求超时：当前网络无法在 20 秒内连接到中转站。请检查代理/VPN 或中转站状态。".to_string()
     } else if error.is_connect() {
-        format!("Gemini 连接失败：无法连接到 generativelanguage.googleapis.com。通常是网络、代理、DNS 或防火墙问题，不是 API Key 错。详细信息：{error}")
+        format!("AI 连接失败：无法连接到中转站。通常是 Base URL、网络、代理、DNS 或防火墙问题。详细信息：{error}")
     } else if error.is_request() {
-        format!("Gemini 请求无法发送：请检查系统代理、证书或网络环境。详细信息：{error}")
+        format!("AI 请求无法发送：请检查中转站地址、系统代理、证书或网络环境。详细信息：{error}")
     } else {
-        format!("Gemini 请求失败：{error}")
+        format!("AI 请求失败：{error}")
     }
 }
 
-fn parse_gemini_body(body: &str) -> Result<String, String> {
-    let parsed: GeminiResponse =
-        serde_json::from_str(body).map_err(|error| format!("解析 Gemini 响应失败：{error}"))?;
+fn parse_chat_body(body: &str) -> Result<String, String> {
+    let parsed: ChatCompletionResponse =
+        serde_json::from_str(body).map_err(|error| format!("解析 AI 响应失败：{error}"))?;
 
-    let candidate = parsed
-        .candidates
-        .and_then(|mut candidates| candidates.pop())
-        .ok_or_else(|| "Gemini 没有返回候选回复。".to_string())?;
+    let choice = parsed
+        .choices
+        .and_then(|mut choices| choices.pop())
+        .ok_or_else(|| "AI 没有返回候选回复。".to_string())?;
 
-    let finish_reason = candidate.finish_reason.unwrap_or_else(|| "UNKNOWN".to_string());
-    let text = candidate
-        .content
-        .and_then(|content| content.parts)
-        .and_then(|parts| {
-            let joined = parts
-                .into_iter()
-                .filter_map(|part| part.text)
-                .collect::<Vec<_>>()
-                .join("");
+    let finish_reason = choice.finish_reason.unwrap_or_else(|| "UNKNOWN".to_string());
+    let text = choice
+        .message
+        .and_then(|message| message.content)
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| format!("AI 没有返回可显示的文本。结束原因：{finish_reason}"))?;
 
-            if joined.trim().is_empty() {
-                None
-            } else {
-                Some(joined.trim().to_string())
-            }
-        })
-        .ok_or_else(|| format!("Gemini 没有返回可显示的文本。结束原因：{finish_reason}"))?;
-
-    if finish_reason == "MAX_TOKENS" {
-        return Err(format!("Gemini 输出被 token 上限截断：{text}"));
+    if finish_reason == "length" || finish_reason == "MAX_TOKENS" {
+        return Err(format!("AI 输出被 token 上限截断：{text}"));
     }
 
     Ok(text)
+}
+
+fn format_api_error(status: reqwest::StatusCode, body: &str) -> (String, bool) {
+    let mut retryable = is_retryable_status(status);
+    let message = serde_json::from_str::<ChatErrorBody>(body)
+        .ok()
+        .and_then(|error_body| error_body.error.and_then(|error| error.message))
+        .unwrap_or_else(|| body.trim().to_string());
+
+    retryable = retryable || is_retryable_message(&message);
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || message.to_lowercase().contains("quota")
+        || message.to_lowercase().contains("rate limit")
+    {
+        return (format!("AI 请求太频繁或额度不足：{message}"), false);
+    }
+
+    if message.is_empty() {
+        (format!("AI 返回错误：HTTP {status}"), retryable)
+    } else {
+        (format!("AI 返回错误：{message}"), retryable)
+    }
 }
 
 #[tauri::command]
@@ -191,14 +214,14 @@ fn save_gemini_api_key(api_key: String) -> Result<(), String> {
         return Err("API Key 不能为空。".to_string());
     }
 
-    gemini_key_entry()?
+    api_key_entry()?
         .set_password(api_key)
-        .map_err(|error| format!("保存 Gemini API Key 失败：{error}"))
+        .map_err(|error| format!("保存 API Key 失败：{error}"))
 }
 
 #[tauri::command]
 fn has_gemini_api_key() -> Result<bool, String> {
-    match gemini_key_entry()?.get_password() {
+    match read_saved_api_key() {
         Ok(api_key) => Ok(!api_key.trim().is_empty()),
         Err(_) => Ok(false),
     }
@@ -206,44 +229,47 @@ fn has_gemini_api_key() -> Result<bool, String> {
 
 #[tauri::command]
 fn delete_gemini_api_key() -> Result<(), String> {
-    match gemini_key_entry()?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(_) => Ok(()),
+    if let Ok(entry) = api_key_entry() {
+        let _ = entry.delete_credential();
     }
+    if let Ok(entry) = legacy_gemini_key_entry() {
+        let _ = entry.delete_credential();
+    }
+    Ok(())
 }
 
-async fn call_gemini(prompt: String, user_note: String) -> Result<String, String> {
-    let api_key = read_saved_gemini_key()?;
+async fn call_ai(base_url: String, model: String, prompt: String, user_note: String) -> Result<String, String> {
+    let api_key = read_saved_api_key()?;
+    let endpoint = normalize_chat_endpoint(base_url);
+    let model = normalize_model(model);
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
-        .map_err(|error| format!("初始化 Gemini HTTP 客户端失败：{error}"))?;
+        .map_err(|error| format!("初始化 AI HTTP 客户端失败：{error}"))?;
 
-    let mut last_error = "Gemini 请求失败。".to_string();
+    let mut last_error = "AI 请求失败。".to_string();
 
-    for attempt in 0..=GEMINI_MAX_RETRIES {
-        let request = GenerateContentRequest {
-            contents: vec![Content {
-                parts: vec![TextPart {
-                    text: normalize_prompt(&prompt),
-                }],
-            }],
-            system_instruction: Content {
-                parts: vec![TextPart {
-                    text: default_instruction(&user_note),
-                }],
-            },
-            generation_config: GenerationConfig {
-                temperature: 0.95,
-                max_output_tokens: 512,
-                thinking_config: ThinkingConfig { thinking_budget: 0 },
-            },
+    for attempt in 0..=CHAT_MAX_RETRIES {
+        let request = ChatCompletionRequest {
+            model: model.clone(),
+            messages: vec![
+                ChatMessageRequest {
+                    role: "system".to_string(),
+                    content: default_instruction(&user_note),
+                },
+                ChatMessageRequest {
+                    role: "user".to_string(),
+                    content: normalize_prompt(&prompt),
+                },
+            ],
+            reasoning_effort: "medium".to_string(),
+            max_completion_tokens: 512,
         };
 
         let response = client
-            .post(GEMINI_ENDPOINT)
-            .header("x-goog-api-key", api_key.trim())
+            .post(&endpoint)
+            .bearer_auth(api_key.trim())
             .json(&request)
             .send()
             .await;
@@ -253,7 +279,7 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
             Err(error) => {
                 let retryable = error.is_timeout() || error.is_connect() || error.is_request();
                 last_error = format_transport_error(error);
-                if retryable && attempt < GEMINI_MAX_RETRIES {
+                if retryable && attempt < CHAT_MAX_RETRIES {
                     thread::sleep(retry_delay(attempt + 1));
                     continue;
                 }
@@ -265,26 +291,16 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
         let body = response
             .text()
             .await
-            .map_err(|error| format!("读取 Gemini 响应失败：{error}"))?;
+            .map_err(|error| format!("读取 AI 响应失败：{error}"))?;
 
         if status.is_success() {
-            return parse_gemini_body(&body);
+            return parse_chat_body(&body);
         }
 
-        let mut retryable = is_retryable_status(status);
-        if let Ok(error_body) = serde_json::from_str::<GeminiErrorBody>(&body) {
-            if let Some(message) = error_body.error.and_then(|error| error.message) {
-                retryable = retryable || is_retryable_message(&message);
-                last_error = format!("Gemini 返回错误：{message}");
-            } else {
-                last_error = format!("Gemini 返回错误：HTTP {status}");
-            }
-        } else {
-            retryable = retryable || is_retryable_message(&body);
-            last_error = format!("Gemini 返回错误：HTTP {status}");
-        }
+        let (message, retryable) = format_api_error(status, &body);
+        last_error = message;
 
-        if retryable && attempt < GEMINI_MAX_RETRIES {
+        if retryable && attempt < CHAT_MAX_RETRIES {
             thread::sleep(retry_delay(attempt + 1));
             continue;
         }
@@ -292,17 +308,17 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
         return Err(last_error);
     }
 
-    Err(format!("{last_error} 已自动重试 {GEMINI_MAX_RETRIES} 次。"))
+    Err(format!("{last_error} 已自动重试 {CHAT_MAX_RETRIES} 次。"))
 }
 
 #[tauri::command]
-async fn ask_gemini(prompt: String, user_note: String) -> Result<String, String> {
-    call_gemini(prompt, user_note).await
+async fn ask_gemini(base_url: String, model: String, prompt: String, user_note: String) -> Result<String, String> {
+    call_ai(base_url, model, prompt, user_note).await
 }
 
 #[tauri::command]
-async fn test_gemini_connection(user_note: String) -> Result<String, String> {
-    call_gemini("请只回复：连接成功。".to_string(), user_note).await
+async fn test_gemini_connection(base_url: String, model: String, user_note: String) -> Result<String, String> {
+    call_ai(base_url, model, "请只回复：连接成功。".to_string(), user_note).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
