@@ -342,3 +342,76 @@ button:hover {
   height: 18px;
   accent-color: #ffd897;
 }
+
+.text-control,
+.textarea-control {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  color: rgba(255, 247, 235, 0.86);
+}
+
+.text-control input,
+.textarea-control textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff7eb;
+  background: rgba(18, 22, 28, 0.84);
+  font: inherit;
+  line-height: 1.55;
+  resize: vertical;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.setting-hint,
+.gemini-status {
+  margin: 12px 0 0;
+  color: rgba(255, 247, 235, 0.7);
+  line-height: 1.7;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: none;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal-backdrop.is-open {
+  display: block;
+}
+
+.gemini-modal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 11;
+  display: none;
+  width: min(560px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(13, 16, 21, 0.94);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+  transform: translate(-50%, -50%);
+  backdrop-filter: blur(14px);
+}
+
+.gemini-modal.is-open {
+  display: block;
+}
+
+.gemini-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
