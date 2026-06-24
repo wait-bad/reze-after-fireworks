@@ -73,7 +73,7 @@ fn normalize_prompt(prompt: &str) -> String {
 
 fn default_instruction(user_note: &str) -> String {
     let note = user_note.trim();
-    let base = "你正在扮演桌面陪伴应用里的蕾塞。请用中文回复，尽量写到30到70字之间，减少AI味，不要总结，不要排比，不要说自己是AI，语气自然、有边界感。";
+    let base = "你正在扮演桌面陪伴应用里的蕾塞。请用中文回复，正常回复必须至少30个中文字符，尽量30到70字之间。减少AI味，不要总结，不要排比，不要说自己是AI，语气自然、有边界感。即使额外备注要求简短，也不要少于30个中文字符。";
 
     if note.is_empty() {
         base.to_string()
@@ -140,6 +140,14 @@ fn format_transport_error(error: reqwest::Error) -> String {
     }
 }
 
+fn visible_char_count(text: &str) -> usize {
+    text.chars().filter(|character| !character.is_whitespace()).count()
+}
+
+fn is_text_too_short(text: &str) -> bool {
+    visible_char_count(text) < 30
+}
+
 fn parse_gemini_body(body: &str) -> Result<String, String> {
     let parsed: GeminiResponse =
         serde_json::from_str(body).map_err(|error| format!("解析 Gemini 响应失败：{error}"))?;
@@ -195,22 +203,8 @@ fn delete_gemini_api_key() -> Result<(), String> {
 
 async fn call_gemini(prompt: String, user_note: String) -> Result<String, String> {
     let api_key = read_saved_gemini_key()?;
-    let request = GenerateContentRequest {
-        contents: vec![Content {
-            parts: vec![TextPart {
-                text: normalize_prompt(&prompt),
-            }],
-        }],
-        system_instruction: Content {
-            parts: vec![TextPart {
-                text: default_instruction(&user_note),
-            }],
-        },
-        generation_config: GenerationConfig {
-            temperature: 0.95,
-            max_output_tokens: 180,
-        },
-    };
+    let mut normalized_prompt = normalize_prompt(&prompt);
+
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -220,6 +214,23 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
     let mut last_error = "Gemini 请求失败。".to_string();
 
     for attempt in 0..=GEMINI_MAX_RETRIES {
+        let request = GenerateContentRequest {
+            contents: vec![Content {
+                parts: vec![TextPart {
+                    text: normalized_prompt.clone(),
+                }],
+            }],
+            system_instruction: Content {
+                parts: vec![TextPart {
+                    text: default_instruction(&user_note),
+                }],
+            },
+            generation_config: GenerationConfig {
+                temperature: 0.95,
+                max_output_tokens: 180,
+            },
+        };
+
         let response = client
             .post(GEMINI_ENDPOINT)
             .header("x-goog-api-key", api_key.trim())
@@ -247,7 +258,17 @@ async fn call_gemini(prompt: String, user_note: String) -> Result<String, String
             .map_err(|error| format!("读取 Gemini 响应失败：{error}"))?;
 
         if status.is_success() {
-            return parse_gemini_body(&body);
+            let text = parse_gemini_body(&body)?;
+            if is_text_too_short(&text) && attempt < GEMINI_MAX_RETRIES {
+                last_error = format!("Gemini 回复过短：只有 {} 个字，正在重试。", visible_char_count(&text));
+                normalized_prompt = format!(
+                    "{}\n\n刚才回复太短了。请重写这次回复，必须至少30个中文字符，30到70字之间，不要解释规则。",
+                    normalize_prompt(&prompt)
+                );
+                thread::sleep(retry_delay(attempt + 1));
+                continue;
+            }
+            return Ok(text);
         }
 
         let mut retryable = is_retryable_status(status);
@@ -298,3 +319,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
