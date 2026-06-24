@@ -6,3 +6,5 @@ src-tauri/target/
 *.log
 .env
 .env.*
+
+user_data/*.mkv

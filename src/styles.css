@@ -235,6 +235,46 @@ button:hover {
   color: rgba(255, 247, 235, 0.86);
 }
 
+.select-control {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  color: rgba(255, 247, 235, 0.86);
+}
+
+.select-control select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #fff7eb;
+  background: rgba(18, 22, 28, 0.84);
+  font: inherit;
+}
+
+.loop-control {
+  align-items: flex-start;
+}
+
+.segmented-control {
+  display: flex;
+  gap: 8px;
+}
+
+.segmented-control button {
+  padding: 8px 10px;
+  color: rgba(255, 247, 235, 0.78);
+}
+
+.segmented-control button.is-active {
+  border-color: rgba(255, 216, 151, 0.95);
+  color: #24160e;
+  background: #ffd897;
+}
+
 .volume-control {
   display: grid;
   grid-template-columns: 44px 1fr 48px;
@@ -295,4 +335,10 @@ button:hover {
   .dialogue p {
     font-size: 16px;
   }
+}
+
+.toggle-control input {
+  width: 18px;
+  height: 18px;
+  accent-color: #ffd897;
 }
