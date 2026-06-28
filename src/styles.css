@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color: #f5efe7;
   background: #0d0f12;
   font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
@@ -414,4 +414,226 @@ button:hover {
 button:disabled {
   cursor: wait;
   opacity: 0.62;
+}
+
+.nou-modal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 11;
+  display: none;
+  width: min(900px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(13, 16, 21, 0.95);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  backdrop-filter: blur(14px);
+}
+
+.nou-modal.is-open {
+  display: block;
+}
+
+.nou-table {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 14px;
+  min-height: 560px;
+  color: #fff7eb;
+}
+
+.nou-header,
+.nou-rival,
+.nou-center,
+.nou-player-row,
+.nou-actions,
+.nou-color-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nou-header {
+  justify-content: space-between;
+}
+
+.nou-header h2,
+.nou-header p {
+  margin: 0;
+}
+
+.nou-header p,
+.nou-message,
+.nou-actions span,
+.nou-rival span {
+  color: rgba(255, 247, 235, 0.72);
+}
+
+.nou-rival {
+  justify-content: space-between;
+  min-height: 86px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nou-hand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nou-hand-rival {
+  flex: 1;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.nou-hand-player {
+  flex: 1;
+  min-height: 156px;
+  overflow-x: auto;
+  padding: 8px 4px 12px;
+}
+
+.nou-center {
+  display: grid;
+  grid-template-columns: 110px 130px 1fr;
+  align-items: center;
+  gap: 18px;
+  min-height: 172px;
+  padding: 16px;
+  border-radius: 8px;
+  background: radial-gradient(circle at center, rgba(255, 216, 151, 0.12), rgba(255, 255, 255, 0.04));
+}
+
+.nou-draw-pile {
+  width: 92px;
+  height: 126px;
+  border-color: rgba(255, 216, 151, 0.45);
+  background: repeating-linear-gradient(135deg, rgba(255, 216, 151, 0.2), rgba(255, 216, 151, 0.2) 8px, rgba(13, 16, 21, 0.92) 8px, rgba(13, 16, 21, 0.92) 16px);
+}
+
+.nou-discard {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.nou-discard span {
+  color: rgba(255, 247, 235, 0.74);
+  font-size: 14px;
+}
+
+.nou-message {
+  min-height: 72px;
+  padding: 14px 16px;
+  border-left: 3px solid #ffd897;
+  line-height: 1.7;
+}
+
+.nou-player-row {
+  align-items: flex-end;
+}
+
+.nou-actions {
+  width: 122px;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.nou-card {
+  position: relative;
+  flex: 0 0 auto;
+  width: 76px;
+  height: 112px;
+  border: 3px solid rgba(255, 255, 255, 0.86);
+  border-radius: 8px;
+  padding: 8px;
+  color: #fff;
+  background: var(--nou-color);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+  font-weight: 800;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.38);
+}
+
+.nou-card:hover {
+  transform: translateY(-6px);
+}
+
+.nou-card.is-playable {
+  border-color: #ffd897;
+  box-shadow: 0 0 0 2px rgba(255, 216, 151, 0.35), 0 14px 28px rgba(0, 0, 0, 0.36);
+}
+
+.nou-card.wild {
+  background: conic-gradient(from 45deg, #d94343, #e2b93b, #2f9b65, #3d76d9, #d94343);
+}
+
+.nou-card strong {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+}
+
+.nou-card small {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 12px;
+}
+
+.nou-corner {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  font-size: 16px;
+}
+
+.nou-card-back {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 76px;
+  border-color: rgba(255, 216, 151, 0.58);
+  background: linear-gradient(135deg, #1c2432, #3a2330);
+  font-size: 14px;
+}
+
+.nou-color-picker {
+  justify-content: center;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.nou-color-picker button {
+  min-width: 52px;
+  background: var(--nou-color);
+}
+
+@media (max-width: 720px) {
+  .nou-modal {
+    padding: 16px;
+  }
+
+  .nou-center {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .nou-message {
+    grid-column: 1 / -1;
+  }
+
+  .nou-card {
+    width: 64px;
+    height: 96px;
+  }
 }

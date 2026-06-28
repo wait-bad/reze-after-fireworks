@@ -1,4 +1,5 @@
-﻿import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { mountNouGame } from "./nou";
 
 type ActionId = "talk" | "gift" | "look" | "rest";
 type LoopMode = "single" | "list";
@@ -92,6 +93,7 @@ const fallbackDialogue: Record<ActionId, string[]> = {
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
+let escapeControlsAttached = false;
 
 function clamp(value: number) {
   return Math.max(0, Math.min(100, value));
@@ -453,12 +455,15 @@ function attachSettingsControls() {
   document.querySelector("#settings-button")?.addEventListener("click", () => setSettingsOpen(true));
   document.querySelector("#settings-close")?.addEventListener("click", () => setSettingsOpen(false));
   document.querySelector("#settings-backdrop")?.addEventListener("click", () => setSettingsOpen(false));
-  window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      if (state.geminiOpen) setAIOpen(false);
-      if (state.settingsOpen) setSettingsOpen(false);
-    }
-  });
+  if (!escapeControlsAttached) {
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        if (state.geminiOpen) setAIOpen(false);
+        if (state.settingsOpen) setSettingsOpen(false);
+      }
+    });
+    escapeControlsAttached = true;
+  }
 }
 
 function attachAIControls() {
@@ -507,6 +512,7 @@ function render() {
           <button data-action="look">看看她</button>
           <button data-action="rest">休息</button>
           <button id="gemini-button">ChatGPT</button>
+          <button id="nou-button">NOU</button>
         </div>
       </section>
       <div id="settings-backdrop" class="settings-backdrop"></div>
@@ -535,6 +541,11 @@ function render() {
       </aside>
       <audio id="bgm" preload="auto"></audio>
       <div id="gemini-backdrop" class="modal-backdrop"></div>
+      <div id="nou-backdrop" class="modal-backdrop"></div>
+      <aside id="nou-modal" class="nou-modal" aria-hidden="true">
+        <div class="settings-header"><h2>NOU</h2><button id="nou-close">关闭</button></div>
+        <div id="nou-root"></div>
+      </aside>
       <aside id="gemini-modal" class="gemini-modal" aria-hidden="true">
         <div class="settings-header"><h2>ChatGPT</h2><button id="gemini-close">关闭</button></div>
         <label class="textarea-control" for="gemini-input"><span>输入内容</span><textarea id="gemini-input" rows="5" placeholder="想对她说什么？">${state.geminiInput}</textarea></label>
@@ -548,6 +559,16 @@ function render() {
   attachMusicControls();
   attachSettingsControls();
   attachAIControls();
+  mountNouGame({
+    buttonSelector: "#nou-button",
+    modalSelector: "#nou-modal",
+    backdropSelector: "#nou-backdrop",
+    rootSelector: "#nou-root",
+    onLine: (line) => {
+      state.scene = line;
+      updateHud();
+    },
+  });
 }
 
 async function init() {
@@ -558,8 +579,3 @@ async function init() {
 }
 
 init();
-
-
-
-
-
